@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Daily Schedule Planner</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #0f172a; color: #f8fafc; margin: 0; padding: 16px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 600px; }
+    .card { background: #1e293b; padding: 20px; border-radius: 12px; margin-bottom: 16px; border: 1px solid #334155; }
+    h2, h3 { margin-top: 0; }
+    input, textarea, button { width: 100%; padding: 12px; margin-top: 8px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 15px; }
+    button { background: #3b82f6; border: none; font-weight: bold; cursor: pointer; margin-top: 12px; }
+    button:hover { background: #2563eb; }
+    button.logout { background: #ef4444; width: auto; padding: 6px 14px; font-size: 13px; float: right; }
+    .hidden { display: none; }
+    .event-card { background: #0f172a; border-left: 4px solid #3b82f6; padding: 12px; margin-top: 10px; border-radius: 6px; }
+    .event-header { display: flex; justify-content: space-between; font-weight: bold; }
+    .event-time { color: #38bdf8; font-size: 13px; }
+    .toggle-auth { color: #94a3b8; font-size: 13px; text-align: center; cursor: pointer; margin-top: 10px; }
+    .status-msg { color: #e2e8f0; font-size: 14px; margin-top: 8px; }
+  </style>
+  <!-- Firebase SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } 
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot } 
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // PASTE YOUR FIREBASE CONFIG FROM PROJECT SETTINGS HERE
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let currentUser = null;
+    let isLoginMode = true;
+
+    // DOM Elements
+    const authSection = document.getElementById("authSection");
+    const dashboardSection = document.getElementById("dashboardSection");
+    const authTitle = document.getElementById("authTitle");
+    const authBtn = document.getElementById("authBtn");
+    const toggleAuth = document.getElementById("toggleAuth");
+    const userEmailSpan = document.getElementById("userEmail");
+    const statusMsg = document.getElementById("statusMsg");
+    const eventList = document.getElementById("eventList");
+
+    // Toggle Sign Up / Login view
+    toggleAuth.addEventListener("click", () => {
+      isLoginMode = !isLoginMode;
+      authTitle.innerText = isLoginMode ? "Login to Scheduler" : "Create an Account";
+      authBtn.innerText = isLoginMode ? "Login" : "Sign Up";
+      toggleAuth.innerText = isLoginMode ? "Don't have an account? Sign up" : "Already have an account? Login";
+    });
+
+    // Auth Action (Sign up / Login)
+    window.handleAuth = async () => {
+      const email = document.getElementById("email").value;
+      const pass = document.getElementById("password").value;
+      try {
+        if (isLoginMode) {
+          await signInWithEmailAndPassword(auth, email, pass);
+        } else {
+          await createUserWithEmailAndPassword(auth, email, pass);
+        }
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+
+    // Logout
+    window.handleLogout = () => signOut(auth);
+
+    // Watch Auth State
+    onAuthStateChanged(auth, (user) => {
+      currentUser = user;
+      if (user) {
+        authSection.classList.add("hidden");
+        dashboardSection.classList.remove("hidden");
+        userEmailSpan.innerText = user.email;
+        listenToUserSchedule(user.uid);
+      } else {
+        authSection.classList.remove("hidden");
+        dashboardSection.classList.add("hidden");
+      }
+    });
+
+    // Real-time listener for current day's events
+    function getTodayKey() {
+      return new Date().toISOString().split("T")[0];
+    }
+
+    function listenToUserSchedule(uid) {
+      const todayDoc = doc(db, "users", uid, "days", getTodayKey());
+      onSnapshot(todayDoc, (docSnap) => {
+        eventList.innerHTML = "";
+        if (docSnap.exists() && docSnap.data().events) {
+          const events = docSnap.data().events;
+          events.forEach(ev => {
+            const div = document.createElement("div");
+            div.className = "event-card";
+            div.innerHTML = `
+              <div class="event-header">
+                <span>${ev.title}</span>
+                <span class="event-time">${ev.startTime} - ${ev.endTime}</span>
+              </div>
+              <div style="font-size:12px; color:#94a3b8; margin-top:4px;">${ev.category.toUpperCase()} • ${ev.notes || ''}</div>
+            `;
+            eventList.appendChild(div);
+          });
+        } else {
+          eventList.innerHTML = `<div style="color: #64748b; font-size:14px;">No tasks yet for today. Ask AI below!</div>`;
+        }
+      });
+    }
+
+    // Call Netlify Function (with automatic 3-tier AI fallback)
+    window.processScheduleWithAI = async () => {
+      const promptInput = document.getElementById("aiPrompt");
+      const text = promptInput.value.trim();
+      if (!text) return;
+
+      statusMsg.innerText = "Coordinating schedule with AI...";
+      
+      const todayDoc = doc(db, "users", currentUser.uid, "days", getTodayKey());
+      const currentSnap = await getDoc(todayDoc);
+      const existingEvents = currentSnap.exists() ? (currentSnap.data().events || []) : [];
+
+      try {
+        const res = await fetch("/.netlify/functions/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rawInput: text,
+            currentSchedule: existingEvents,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to process schedule");
+
+        // Save AI updated schedule to Firebase Firestore
+        await setDoc(todayDoc, { events: data.events }, { merge: true });
+        statusMsg.innerText = "Done! " + (data.summary || "");
+        promptInput.value = "";
+      } catch (err) {
+        statusMsg.innerText = "Error: " + err.message;
+      }
+    };
+  </script>
+</head>
+<body>
+  <div class="container">
+    <!-- Auth Card -->
+    <div id="authSection" class="card">
+      <h2 id="authTitle">Login to Scheduler</h2>
+      <input type="email" id="email" placeholder="Email" required autocomplete="email" />
+      <input type="password" id="password" placeholder="Password" required autocomplete="current-password" />
+      <button id="authBtn" onclick="handleAuth()">Login</button>
+      <div id="toggleAuth" class="toggleAuth">Don't have an account? Sign up</div>
+    </div>
+
+    <!-- Dashboard Card -->
+    <div id="dashboardSection" class="card hidden">
+      <button class="logout" onclick="handleLogout()">Log out</button>
+      <h3>Today's Schedule</h3>
+      <p style="font-size: 13px; color: #94a3b8; margin-top: -8px;">Logged in as: <span id="userEmail"></span></p>
+
+      <div id="eventList"></div>
+
+      <div style="margin-top: 24px;">
+        <h3>AI Assistant</h3>
+        <textarea id="aiPrompt" rows="3" placeholder="e.g. Schedule meeting with team at 11 AM, fit in 1 hour gym before 5 PM, and write reports for 2 hours."></textarea>
+        <button onclick="processScheduleWithAI()">Update My Schedule</button>
+        <div id="statusMsg" class="status-msg"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
